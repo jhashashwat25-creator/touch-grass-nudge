@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Touch Grass Nudge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --lawn: #e8efd6;
+    --paper: #f8faf0;
+    --ink: #1d2813;
+    --moss: #5f7f2e;
+    --dandelion: #f3c623;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--lawn);
+    color: var(--ink);
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 56px 20px 40px; }
+  h1 {
+    font-size: clamp(2.6rem, 9vw, 4.6rem);
+    line-height: 0.98;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin: 0 0 16px;
+  }
+  .lede { font-size: 1.15rem; max-width: 46ch; margin: 0 0 36px; }
+  fieldset { border: 0; padding: 0; margin: 0 0 22px; }
+  legend, label.field { font-weight: 600; margin-bottom: 8px; display: block; padding: 0; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chips input { position: absolute; opacity: 0; }
+  .chips label {
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    padding: 6px 18px;
+    cursor: pointer;
+    background: transparent;
+  }
+  .chips input:checked + label { background: var(--ink); color: var(--lawn); }
+  .chips input:focus-visible + label { outline: 3px solid var(--moss); outline-offset: 2px; }
+  select {
+    font: inherit;
+    padding: 8px 12px;
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--ink);
+    min-width: 220px;
+  }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 28px; }
+  button {
+    font: inherit;
+    font-weight: 800;
+    font-size: 1.1rem;
+    background: var(--dandelion);
+    color: var(--ink);
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    padding: 14px 30px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #ffd84a; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  button:focus-visible, select:focus-visible { outline: 3px solid var(--moss); outline-offset: 3px; }
+  #status { margin: 18px 0 0; min-height: 1.5em; color: var(--moss); font-weight: 600; }
+  #result {
+    background: var(--paper);
+    border-left: 8px solid var(--moss);
+    padding: 20px 22px;
+    margin-top: 20px;
+    white-space: pre-wrap;
+    font-size: 1.1rem;
+    display: none;
+  }
+  footer { margin-top: 56px; font-size: 0.9rem; opacity: 0.85; max-width: 60ch; }
+  footer a { color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ten minutes. Outside. No phone.</h1>
+  <p class="lede">Tell it how much time you have and where you are. A small open-source AI model, running inside this browser tab, writes you one tiny mission.</p>
+
+  <fieldset>
+    <legend>How long?</legend>
+    <div class="chips">
+      <input type="radio" name="mins" id="m5" value="5"><label for="m5">5 min</label>
+      <input type="radio" name="mins" id="m10" value="10" checked><label for="m10">10 min</label>
+      <input type="radio" name="mins" id="m20" value="20"><label for="m20">20 min</label>
+    </div>
+  </fieldset>
+
+  <div class="row">
+    <div>
+      <label class="field" for="place">Where are you?</label>
+      <select id="place">
+        <option>At home, with a balcony or window</option>
+        <option>On a city street</option>
+        <option>Near a park or garden</option>
+        <option>At a campus or office</option>
+      </select>
+    </div>
+    <div>
+      <label class="field" for="mood">How do you feel?</label>
+      <select id="mood">
+        <option>Screen-tired</option>
+        <option>Stressed</option>
+        <option>Bored</option>
+        <option>Restless</option>
+      </select>
+    </div>
+  </div>
+
+  <button id="go">Give me a mission</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <div id="result" aria-live="polite"></div>
+
+  <footer>
+    Runs fully in your browser with Qwen2.5-0.5B-Instruct (Apache-2.0) through Transformers.js. Nothing you pick is sent to a server. The first run downloads the model (a few hundred MB), then your browser caches it.
+    <a href="https://github.com/jhashashwat25-creator/touch-grass-nudge">Source on GitHub</a>.
+  </footer>
+</main>
+
+<script type="module">
+  import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
+
+  const MODEL = "onnx-community/Qwen2.5-0.5B-Instruct";
+  const $ = (id) => document.getElementById(id);
+  const btn = $("go"), statusEl = $("status"), result = $("result");
+  let generator = null;
+
+  const onProgress = (p) => {
+    if (p.status === "progress" && typeof p.progress === "number") {
+      statusEl.textContent = `Downloading model… ${Math.round(p.progress)}%`;
+    }
+  };
+
+  async function loadModel() {
+    if (generator) return generator;
+    statusEl.textContent = "Loading the model…";
+    if (navigator.gpu) {
+      try {
+        generator = await pipeline("text-generation", MODEL, {
+          device: "webgpu", dtype: "q4", progress_callback: onProgress,
+        });
+        return generator;
+      } catch (e) {
+        console.warn("WebGPU failed, falling back to CPU", e);
+      }
+    }
+    generator = await pipeline("text-generation", MODEL, {
+      dtype: "q8", progress_callback: onProgress,
+    });
+    return generator;
+  }
+
+  btn.addEventListener("click", async () => {
+    const mins = document.querySelector('input[name="mins"]:checked').value;
+    const place = $("place").value.toLowerCase();
+    const mood = $("mood").value.toLowerCase();
+
+    btn.disabled = true;
+    result.style.display = "none";
+    try {
+      const gen = await loadModel();
+      statusEl.textContent = "Thinking up a mission…";
+      const messages = [
+        {
+          role: "system",
+          content:
+            "You write one tiny outdoor mission for a person who has been on screens too long. " +
+            "Reply in exactly three short lines that start with 'Mission:', 'Why:' and 'Bring:'. " +
+            "Under 60 words total. Plain words, no emojis, nothing that needs money or special gear.",
+        },
+        {
+          role: "user",
+          content: `I have ${mins} minutes. I am ${place}. I feel ${mood}.`,
+        },
+      ];
+      const out = await gen(messages, {
+        max_new_tokens: 140, do_sample: true, temperature: 0.8, top_p: 0.9,
+      });
+      result.textContent = out[0].generated_text.at(-1).content.trim();
+      result.style.display = "block";
+      statusEl.textContent = "Now go. Leave the phone on the table.";
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent =
+        "The model could not load. Try Chrome or Edge on a laptop or desktop, then reload this page.";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
